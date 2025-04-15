@@ -12,21 +12,52 @@ class Student:
 class StudentData:
     def __init__(self):
         self.students = []
+        self.id_map = {}
+        self.name_map = {}
 
     def add_student(self, student_id, name, grades):
-        self.students.append(Student(student_id, name, grades))
+        student = Student(student_id, name, grades)
+        self.students.append(student)
+        self.id_map[student_id] = student
+        self.name_map[name.lower()] = student
+        self.students.sort(key=lambda s: s.student_id)  # Keep sorted by ID for binary search
 
     def remove_student(self, student_id):
         self.students = [s for s in self.students if s.student_id != student_id]
+        self.id_map.pop(student_id, None)
+        for name, s in list(self.name_map.items()):
+            if s.student_id == student_id:
+                self.name_map.pop(name)
 
     def update_student(self, student_id, name, grades):
-        for s in self.students:
-            if s.student_id == student_id:
-                s.name = name
-                s.grades = grades
-                s.average = round(sum(grades) / len(grades), 2) if grades else 0.0
-                return True
+        student = self.id_map.get(student_id)
+        if student:
+            old_name = student.name.lower()
+            student.name = name
+            student.grades = grades
+            student.average = round(sum(grades) / len(grades), 2)
+            self.name_map.pop(old_name, None)
+            self.name_map[name.lower()] = student
+            return True
         return False
+
+    def binary_search_by_id(self, student_id):
+        low, high = 0, len(self.students) - 1
+        while low <= high:
+            mid = (low + high) // 2
+            if self.students[mid].student_id == student_id:
+                return self.students[mid]
+            elif self.students[mid].student_id < student_id:
+                low = mid + 1
+            else:
+                high = mid - 1
+        return None
+
+    def get_student_by_id(self, student_id):
+        return self.id_map.get(student_id)
+
+    def get_student_by_name(self, name_query):
+        return self.name_map.get(name_query.lower())
 
     def get_all(self):
         return self.students
@@ -50,7 +81,7 @@ class StudentData:
                 for s in data:
                     self.add_student(s["student_id"], s["name"], s["grades"])
         except FileNotFoundError:
-            print("No existing file found. Starting fresh.")
+            pass
 
 class GradeManagementApp:
     def __init__(self, root):
@@ -59,11 +90,10 @@ class GradeManagementApp:
         self.root.geometry("900x550")
         self.data = StudentData()
         self.data.load_from_file()
-        self.create_widgets()
+        self.setup_ui()
         self.display_students()
 
-    def create_widgets(self):
-        # Search bar
+    def setup_ui(self):
         search_frame = ttk.Frame(self.root)
         search_frame.pack(pady=5)
 
@@ -72,40 +102,22 @@ class GradeManagementApp:
         ttk.Button(search_frame, text="Search", command=self.search_student).pack(side=tk.LEFT, padx=5)
         ttk.Button(search_frame, text="Clear", command=self.display_students).pack(side=tk.LEFT, padx=5)
 
-        # Title label
         title = ttk.Label(self.root, text="🎓 Student Grade Management System", font=("Helvetica", 20, "bold"))
         title.pack(pady=10)
 
-        # Treeview for displaying students
         self.tree = ttk.Treeview(self.root, columns=("ID", "Name", "Grades", "Average"), show="headings")
-        self.tree.heading("ID", text="Student ID")
-        self.tree.heading("Name", text="Name")
-        self.tree.heading("Grades", text="Grades")
-        self.tree.heading("Average", text="Average")
-        self.tree.column("ID", width=100, anchor="center")
-        self.tree.column("Name", width=200, anchor="center")
-        self.tree.column("Grades", width=250, anchor="center")
-        self.tree.column("Average", width=100, anchor="center")
+        for col in ["ID", "Name", "Grades", "Average"]:
+            self.tree.heading(col, text=col)
+            self.tree.column(col, anchor="center")
         self.tree.pack(pady=10, fill=tk.BOTH, expand=True)
 
-        # Sorting options
-        sort_frame = ttk.Frame(self.root)
-        sort_frame.pack(pady=10)
-
-        self.sort_var = tk.StringVar()
-        self.sort_var.set("Average")  # Default sorting by average grade
-        sort_options = ["Student ID", "Name", "Average"]
-        ttk.Combobox(sort_frame, textvariable=self.sort_var, values=sort_options, state="readonly").pack(side=tk.LEFT, padx=5)
-        ttk.Button(sort_frame, text="Sort", command=self.sort_students).pack(side=tk.LEFT, padx=5)
-
-        # Buttons for operations
         btn_frame = ttk.Frame(self.root)
         btn_frame.pack(pady=10)
 
-        ttk.Button(btn_frame, text="Add Student", command=self.open_add_window).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Edit Student", command=self.open_edit_window).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Remove Student", command=self.open_delete_window).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Save to File", command=self.save_data).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Add", command=self.add_student_popup).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Edit", command=self.edit_selected).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Delete", command=self.delete_selected).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Save", command=self.save_data).pack(side=tk.LEFT, padx=5)
 
     def display_students(self):
         for row in self.tree.get_children():
@@ -113,114 +125,92 @@ class GradeManagementApp:
         for s in self.data.get_all():
             self.tree.insert("", tk.END, values=(s.student_id, s.name, s.grades, s.average))
 
-    # --- Add Student Window ---
-    def open_add_window(self):
+    def add_student_popup(self):
         win = tk.Toplevel(self.root)
         win.title("Add Student")
-        win.geometry("350x300")
-        win.resizable(False, False)
 
-        tk.Label(win, text="Student ID:", font=("Arial", 12)).pack(pady=5)
-        id_entry = ttk.Entry(win)
-        id_entry.pack(pady=5)
+        ttk.Label(win, text="Student ID:").pack()
+        entry_id = ttk.Entry(win)
+        entry_id.pack()
 
-        tk.Label(win, text="Name:", font=("Arial", 12)).pack(pady=5)
-        name_entry = ttk.Entry(win)
-        name_entry.pack(pady=5)
+        ttk.Label(win, text="Name:").pack()
+        entry_name = ttk.Entry(win)
+        entry_name.pack()
 
-        tk.Label(win, text="Grades (space-separated):", font=("Arial", 12)).pack(pady=5)
-        grades_entry = ttk.Entry(win)
-        grades_entry.pack(pady=5)
+        ttk.Label(win, text="Grades (space-separated):").pack()
+        entry_grades = ttk.Entry(win)
+        entry_grades.pack()
 
-        def add_student_action():
+        def submit():
             try:
-                sid = int(id_entry.get())
-                name = name_entry.get().strip()
-                grades = list(map(float, grades_entry.get().strip().split()))
+                sid = int(entry_id.get())
+                name = entry_name.get().strip()
+                grades = list(map(float, entry_grades.get().strip().split()))
                 if not name or not grades:
-                    raise ValueError("Name and grades are required.")
-                # Check for duplicate ID
-                if any(s.student_id == sid for s in self.data.get_all()):
-                    messagebox.showerror("Error", "Student ID already exists.")
-                    return
+                    raise ValueError("Invalid input")
+                if self.data.get_student_by_id(sid):
+                    raise ValueError("Student ID already exists")
                 self.data.add_student(sid, name, grades)
                 self.display_students()
                 win.destroy()
             except Exception as e:
-                messagebox.showerror("Error", f"Invalid input: {e}")
+                messagebox.showerror("Error", str(e))
 
-        ttk.Button(win, text="Add", command=add_student_action).pack(pady=15)
+        ttk.Button(win, text="Add", command=submit).pack(pady=10)
 
-    # --- Edit Student Window ---
-    def open_edit_window(self):
+    def edit_selected(self):
         selected = self.tree.selection()
         if not selected:
-            messagebox.showwarning("Select", "Please select a student to edit.")
+            messagebox.showwarning("Warning", "Please select a student to edit.")
             return
+
         item = self.tree.item(selected[0])
-        student_id = item["values"][0]
-        current_name = item["values"][1]
-        current_grades = item["values"][2]
+        sid = item["values"][0]
+        student = self.data.get_student_by_id(sid)
 
         win = tk.Toplevel(self.root)
         win.title("Edit Student")
-        win.geometry("350x300")
-        win.resizable(False, False)
 
-        tk.Label(win, text="Student ID (unchangeable):", font=("Arial", 12)).pack(pady=5)
-        id_label = tk.Label(win, text=str(student_id), font=("Arial", 12, "bold"))
-        id_label.pack(pady=5)
+        ttk.Label(win, text="ID (cannot edit)").pack()
+        entry_id = ttk.Entry(win)
+        entry_id.insert(0, str(student.student_id))
+        entry_id.config(state="disabled")
+        entry_id.pack()
 
-        tk.Label(win, text="Name:", font=("Arial", 12)).pack(pady=5)
-        name_entry = ttk.Entry(win)
-        name_entry.insert(0, current_name)
-        name_entry.pack(pady=5)
+        ttk.Label(win, text="Name").pack()
+        entry_name = ttk.Entry(win)
+        entry_name.insert(0, student.name)
+        entry_name.pack()
 
-        tk.Label(win, text="Grades (space-separated):", font=("Arial", 12)).pack(pady=5)
-        grades_entry = ttk.Entry(win)
-        grades_entry.insert(0, " ".join(map(str, current_grades)))
-        grades_entry.pack(pady=5)
+        ttk.Label(win, text="Grades (space-separated)").pack()
+        entry_grades = ttk.Entry(win)
+        entry_grades.insert(0, " ".join(map(str, student.grades)))
+        entry_grades.pack()
 
-        def edit_student_action():
+        def submit():
             try:
-                name = name_entry.get().strip()
-                grades = list(map(float, grades_entry.get().strip().split()))
+                name = entry_name.get().strip()
+                grades = list(map(float, entry_grades.get().split()))
                 if not name or not grades:
-                    raise ValueError("Name and grades are required.")
-                self.data.update_student(student_id, name, grades)
+                    raise ValueError("All fields are required")
+                self.data.update_student(student.student_id, name, grades)
                 self.display_students()
                 win.destroy()
             except Exception as e:
-                messagebox.showerror("Error", f"Invalid input: {e}")
+                messagebox.showerror("Error", str(e))
 
-        ttk.Button(win, text="Update", command=edit_student_action).pack(pady=15)
+        ttk.Button(win, text="Update", command=submit).pack(pady=10)
 
-    # --- Delete Student Window ---
-    def open_delete_window(self):
+    def delete_selected(self):
         selected = self.tree.selection()
         if not selected:
-            messagebox.showwarning("Select", "Please select a student to remove.")
+            messagebox.showwarning("Warning", "Please select a student to delete.")
             return
+
         item = self.tree.item(selected[0])
-        student_id = item["values"][0]
-        student_name = item["values"][1]
-
-        win = tk.Toplevel(self.root)
-        win.title("Remove Student")
-        win.geometry("350x150")
-        win.resizable(False, False)
-
-        tk.Label(win, text=f"Are you sure you want to remove\n'{student_name}' (ID: {student_id})?", font=("Arial", 12)).pack(pady=20)
-
-        def delete_action():
-            self.data.remove_student(student_id)
-            self.display_students()
-            win.destroy()
-
-        btn_frame = ttk.Frame(win)
-        btn_frame.pack(pady=10)
-        ttk.Button(btn_frame, text="Yes, Remove", command=delete_action).pack(side=tk.LEFT, padx=10)
-        ttk.Button(btn_frame, text="Cancel", command=win.destroy).pack(side=tk.LEFT, padx=10)
+        sid = item["values"][0]
+        self.data.remove_student(sid)
+        self.display_students()
 
     def save_data(self):
         self.data.save_to_file()
@@ -229,32 +219,25 @@ class GradeManagementApp:
     def search_student(self):
         query = self.search_var.get().strip().lower()
         if not query:
-            messagebox.showwarning("Search", "Please enter a name or ID to search.")
+            messagebox.showwarning("Search", "Enter a name or ID")
             return
+
         results = []
-        for s in self.data.get_all():
-        # Match by ID, full/partial name, or first letter(s) of name
-            if (
-                query in str(s.student_id).lower()
-                or s.name.lower().startswith(query)
-        ):
-                results.append(s)
+        if query.isdigit():
+            student = self.data.binary_search_by_id(int(query))
+            if student:
+                results.append(student)
+        else:
+            for student in self.data.get_all():
+                if student.name.lower() == query or student.name.lower().startswith(query):
+                    results.append(student)
+
         for row in self.tree.get_children():
             self.tree.delete(row)
         for s in results:
             self.tree.insert("", tk.END, values=(s.student_id, s.name, s.grades, s.average))
         if not results:
-            messagebox.showinfo("Search", "No matching student found.")
-
-    def sort_students(self):
-        sort_criteria = self.sort_var.get()
-        if sort_criteria == "Student ID":
-            self.data.students.sort(key=lambda s: s.student_id)
-        elif sort_criteria == "Name":
-            self.data.students.sort(key=lambda s: s.name.lower())
-        elif sort_criteria == "Average":
-            self.data.students.sort(key=lambda s: s.average, reverse=True)
-        self.display_students()
+            messagebox.showinfo("Search", "No match found")
 
 if __name__ == "__main__":
     root = tk.Tk()
